@@ -102,4 +102,4 @@ This design ensures that changing the header, filename, metadata, order of chunk
 
 ## Warning
 
- - [Aurora-PI](https://github.com/vercingetorx/aurora-pi) is an experimental cipher that has not been peer reviewed. It should not be used when you need guaranteed security.
+ - [AURORA-Π](https://github.com/vercingetorx/aurora-pi) is an experimental cipher that has not been peer reviewed. It should not be used when you need guaranteed security.
