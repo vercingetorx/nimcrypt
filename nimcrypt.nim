@@ -123,7 +123,7 @@ proc getU16(s: Stream): uint16 =
 # -------------------- KDF & labels --------------------
 
 proc kdfMaster*(password: string, salt: openArray[byte], mKiB: int = 32, t: int = 32, p: int = 32, outLen: int = 32): seq[byte] =
-  newArgon2Ctx(password.toOpenArrayByte(0, password.len - 1), salt, timeCost=t, memoryCost=mKiB, parallelism=p, digestSize=outLen).digest()
+  return argon2Hash(password.toOpenArrayByte(0, password.len - 1), salt, timeCost=t, memoryCost=mKiB, parallelism=p, digestSize=outLen)
 
 
 proc kdfLabel(master: openArray[byte], label: string): array[32, byte] =
