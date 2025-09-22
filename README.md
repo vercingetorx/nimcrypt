@@ -100,3 +100,6 @@ This design ensures that changing the header, filename, metadata, order of chunk
 - Strong passwords matter. Increase Argon2 parameters (`--m`, `--t`, `--p`) as your machine allows.
 - Forgetting the password means the data cannot be recovered.
 
+## Warning
+
+ - [Aurora-PI](https://github.com/vercingetorx/aurora-pi) is an experimental cipher that has not been peer reviewed. It should not be used when you need gueranteed security.
