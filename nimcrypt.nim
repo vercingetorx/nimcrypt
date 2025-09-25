@@ -754,16 +754,31 @@ proc parseSuite(s: string): CipherSuite =
   raise newException(ValueError, "unknown cipher: " & s)
 
 proc usage() =
-  echo "NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)"
-  echo "usage:"
-  echo "  nimcrypt -e/encrypt/-d/decrypt [flags] file"
-  echo "  nimcrypt -v/--version"
-  echo "  nimcrypt <subcommand> -q/--quiet"
-  echo "  nimcrypt <subcommand> -r/--recursive"
-  echo "  nimcrypt <subcommand> -c/--cipher"
-  echo "  nimcrypt <subcommand> -m<N> -t<N> -p<N>"
-  echo ""
-  echo "Use 'nimcrypt --help' to see all options."
+  echo """
+NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)
+usage:
+  nimcrypt [options] <path> [<path> ...]
+
+  Modes
+    -e, --encrypt      Encrypt (default if not specified)
+    -d, --decrypt      Decrypt
+
+  General
+    -r, --recursive    Recurse into directories
+    -q, --quiet        Reduce output
+    -v, --version      Print format version
+
+  Performance
+    --chunk <MiB>      Chunk size in MiB (default: 1)
+
+  KDF (Argon2id)
+    --m <KiB>          Memory cost in KiB   (default: 65536 = 64 MiB)
+    --t <iters>        Time cost (iterations, default: 3)
+    --p <lanes>        Parallelism (default: 1)
+
+  Cipher suite
+    --cipher <name>    xchacha20 | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv | aurora-siv (default: xchacha20)
+"""
 
 proc main() =
   const
