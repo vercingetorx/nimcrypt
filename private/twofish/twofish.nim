@@ -18,7 +18,9 @@ type
     s: array[4, array[256, uint32]]
     k: array[40, uint32]
 
+
 include twofish_core
+
 const twofishSbox* = sbox
 #[
   key sizes (int bytes -> bits):
