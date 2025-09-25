@@ -753,6 +753,17 @@ proc parseSuite(s: string): CipherSuite =
   if v in ["aurora", "aurora-siv", "aurorasiv"]: return csAuroraCtr
   raise newException(ValueError, "unknown cipher: " & s)
 
+proc usage() =
+  echo "NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)"
+  echo "usage:"
+  echo "  nimcrypt -e/encrypt/-d/decrypt [flags] file"
+  echo "  nimcrypt -v/--version"
+  echo "  nimcrypt <subcommand> -q/--quiet"
+  echo "  nimcrypt <subcommand> -r/--recursive"
+  echo "  nimcrypt <subcommand> -c/--cipher"
+  echo "  nimcrypt <subcommand> -m<N> -t<N> -p<N>"
+  echo ""
+  echo "Use 'nimcrypt --help' to see all options."
 
 proc main() =
   const
@@ -779,15 +790,7 @@ proc main() =
       of "e","encrypt": mode = 0
       of "d","decrypt": mode = 1
       of "h","help":
-        echo "NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)"
-        echo "nimcrypt encrypt/decrypt [args] file"
-        echo "-q/--quiet"
-        echo "-r/--recursive"
-        echo "-v/--version"
-        echo "-c/--cipher"
-        echo "-m"
-        echo "-t"
-        echo "-p"
+        usage()
         return
       of "q","quiet": quiet = true
       of "r","recursive": recursive = true
