@@ -9,12 +9,12 @@
 #   -v/--version           : print version
 #   --chunk <MiB>          : chunk size in MiB (default 1)
 #   --m <KiB> --t <iters> --p <lanes> : Argon2id (defaults m=65536,t=3,p=1)
-#   --cipher <name>        : xchacha20 (default) | aes-gcm-siv | twofish-gcm-siv | aurora-siv
+#   --cipher <name>        : xchacha20 (default) | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv | aurora-siv
 #
 # Header v3 (authenticated as AD):
 #   magic[4] = "AEF1"
 #   version[1] = 3
-#   suite[1]   : 0=xchacha20, 1=aes-gcm-siv, 2=twofish-gcm-siv, 3=aurora-siv
+#   suite[1]   : 0=xchacha20, 1=aes-gcm-siv, 2=twofish-gcm-siv, 3=serpent-gcm-siv, 4=camellia-gcm-siv, 50=aurora-siv
 #   flags[1]   (bit0: has filename, bit1: has metadata)
 #   mKiB[u32], t[u32], p[u32]
 #   salt[32]
@@ -39,6 +39,8 @@ import private/chacha20/poly1305
 import private/aes/aes
 import private/twofish/twofish
 import private/aurorapi/aurora
+import private/serpent/serpent
+import private/camellia/camellia
 import private/chacha20/chacha20
 
 # -------------------- Constants & Types --------------------
@@ -67,7 +69,10 @@ type
     csXChaCha20  = 0'u8
     csAesGCM     = 1'u8
     csTwofishGCM = 2'u8
-    csAuroraCtr  = 3'u8
+    csSerpentGCM = 3'u8
+    csCamelliaGCM= 4'u8
+    # test ciphers 50+
+    csAuroraCtr  = 50'u8
 
   Header* = object
     magic:       array[4, char]
@@ -133,10 +138,12 @@ proc kdfLabel(master: openArray[byte], label: string): array[32, byte] =
 
 proc suiteName(s: CipherSuite): string =
   case s
-  of csXChaCha20:  "xchacha20"
-  of csAesGCM:     "aes-gcm-siv"
-  of csTwofishGCM: "twofish-gcm-siv"
-  of csAuroraCtr:  "aurora-ctr"
+  of csXChaCha20:   "xchacha20"
+  of csAesGCM:      "aes-gcm-siv"
+  of csTwofishGCM:  "twofish-gcm-siv"
+  of csSerpentGCM:  "serpent-gcm-siv"
+  of csCamelliaGCM: "camellia-gcm-siv"
+  of csAuroraCtr:   "aurora-ctr"
 
 
 proc tagLenForSuite(s: CipherSuite): int =
@@ -169,7 +176,7 @@ proc nonce8ForIdx(base: array[NonceBaseLen, byte], idx: uint64): array[8, byte] 
   return result
 
 
-# For AES/Twofish
+# For AES/Twofish/Serpent/Camellia
 proc nonce12ForIdx(base: array[NonceBaseLen, byte], idx: uint64): array[12, byte] =
   ## AES 12-byte nonce derivation using 8-bit steps across lower 6 bytes (48-bit space)
   for i in 0..<6:
@@ -219,7 +226,7 @@ proc aeadXC20P1305Decrypt(key: openArray[byte], nonce24: array[NonceBaseLen, byt
 
 # AES-GCM-SIV
 proc aeadAesGcmSivEncrypt(key: openArray[byte], nonce12: array[12,byte],
-                            ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
+                          ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
   ## Encrypt using AES-GCM-SIV, returning (ct, tag)
   var ctx = newAesGcmSivCtx(key, nonce12)
   let (ctOnly, tagBlock) = ctx.encrypt(ad, pt)
@@ -230,7 +237,7 @@ proc aeadAesGcmSivEncrypt(key: openArray[byte], nonce12: array[12,byte],
 
 
 proc aeadAesGcmSivDecrypt(key: openArray[byte], nonce12: array[12,byte],
-                            ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
+                          ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
   ## Verify tag and decrypt using AES-GCM-SIV. Returns (ok, pt).
   var ctx = newAesGcmSivCtx(key, nonce12)
   let pt = ctx.decrypt(ad, ct, tag)
@@ -257,18 +264,58 @@ proc aeadTwofishGcmSivDecrypt(key: openArray[byte], nonce12: array[12,byte],
   return (true, pt)
 
 
+# Serpent-GCM-SIV
+proc aeadSerpentGcmSivEncrypt(key: openArray[byte], nonce12: array[12,byte],
+                              ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
+  ## Encrypt using AES-GCM-SIV, returning (ct, tag)
+  var ctx = newSerpentGcmSivCtx(key, nonce12)
+  let (ctOnly, tagBlock) = ctx.encrypt(ad, pt)
+  var tag: array[TagLen, byte]
+  for j in 0 ..< TagLen:
+    tag[j] = tagBlock[j]
+  return (ctOnly, tag)
+
+
+proc aeadSerpentGcmSivDecrypt(key: openArray[byte], nonce12: array[12,byte],
+                          ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
+  ## Verify tag and decrypt using AES-GCM-SIV. Returns (ok, pt).
+  var ctx = newSerpentGcmSivCtx(key, nonce12)
+  let pt = ctx.decrypt(ad, ct, tag)
+  return (true, pt)
+
+
+# Camellia-GCM-SIV
+proc aeadCamelliaGcmSivEncrypt(key: openArray[byte], nonce12: array[12,byte],
+                          ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
+  ## Encrypt using AES-GCM-SIV, returning (ct, tag)
+  var ctx = newCamelliaGcmSivCtx(key, nonce12)
+  let (ctOnly, tagBlock) = ctx.encrypt(ad, pt)
+  var tag: array[TagLen, byte]
+  for j in 0 ..< TagLen:
+    tag[j] = tagBlock[j]
+  return (ctOnly, tag)
+
+
+proc aeadCamelliaGcmSivDecrypt(key: openArray[byte], nonce12: array[12,byte],
+                          ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
+  ## Verify tag and decrypt using AES-GCM-SIV. Returns (ok, pt).
+  var ctx = newCamelliaGcmSivCtx(key, nonce12)
+  let pt = ctx.decrypt(ad, ct, tag)
+  return (true, pt)
+
+
 # Aurora-SIV
 proc aeadAuroraCtrP1305Encrypt(key: openArray[byte], nonce16: array[16,byte],
                                ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
-  let cipher = newAuroraPiContext(key, nonce16)
-  let (tag, ct) = cipher.sivSeal(ad, pt)
+  let ctx = newAuroraPiContext(key, nonce16)
+  let (tag, ct) = ctx.sivSeal(ad, pt)
   return (ct, tag)
 
 
 proc aeadAuroraCtrP1305Decrypt(key: openArray[byte], nonce16: array[16,byte],
                                ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
-  let cipher = newAuroraPiContext(key, nonce16)
-  var pt = cipher.sivOpen(ad, tag, ct)
+  let ctx = newAuroraPiContext(key, nonce16)
+  var pt = ctx.sivOpen(ad, tag, ct)
   return (true, pt)
 
 # ---- Suite router helpers ----
@@ -276,19 +323,23 @@ proc aeadAuroraCtrP1305Decrypt(key: openArray[byte], nonce16: array[16,byte],
 proc aeadEncryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLen, byte],
                    idx: uint64, ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
   case s
-  of csXChaCha20: aeadXC20P1305Encrypt(key, nonce24WithIdx(base, idx), ad, pt)
-  of csAesGCM:    aeadAesGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
-  of csTwofishGCM:aeadTwofishGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
-  of csAuroraCtr: aeadAuroraCtrP1305Encrypt(key, nonce16ForIdx(base, idx), ad, pt)
+  of csXChaCha20:   aeadXC20P1305Encrypt(key, nonce24WithIdx(base, idx), ad, pt)
+  of csAesGCM:      aeadAesGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
+  of csTwofishGCM:  aeadTwofishGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
+  of csSerpentGCM:  aeadSerpentGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
+  of csCamelliaGCM: aeadCamelliaGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
+  of csAuroraCtr:   aeadAuroraCtrP1305Encrypt(key, nonce16ForIdx(base, idx), ad, pt)
 
 
 proc aeadDecryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLen, byte],
                    idx: uint64, ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
   case s
-  of csXChaCha20: aeadXC20P1305Decrypt(key, nonce24WithIdx(base, idx), ad, ct, tag)
-  of csAesGCM:    aeadAesGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
-  of csTwofishGCM:aeadTwofishGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
-  of csAuroraCtr: aeadAuroraCtrP1305Decrypt(key, nonce16ForIdx(base, idx), ad, ct, tag)
+  of csXChaCha20:   aeadXC20P1305Decrypt(key, nonce24WithIdx(base, idx), ad, ct, tag)
+  of csAesGCM:      aeadAesGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
+  of csTwofishGCM:  aeadTwofishGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
+  of csSerpentGCM:  aeadSerpentGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
+  of csCamelliaGCM: aeadCamelliaGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
+  of csAuroraCtr:   aeadAuroraCtrP1305Decrypt(key, nonce16ForIdx(base, idx), ad, ct, tag)
 
 
 # Keep the old meta/filename/chunk helpers for clarity
@@ -697,6 +748,8 @@ proc parseSuite(s: string): CipherSuite =
   if v in ["chacha", "xchacha20", "xc20", "xchacha20-poly1305"]: return csXChaCha20
   if v in ["aes", "aes-gcm-siv", "aes-gcm", "aesgcm"]: return csAesGCM
   if v in ["twofish", "twofish-gcm-siv", "twofish-gcm", "twofishgcm"]: return csTwofishGCM
+  if v in ["serpent", "serpent-gcm-siv", "serpent-gcm", "serpentgcm"]: return csSerpentGCM
+  if v in ["camellia", "camellia-gcm-siv", "camellia-gcm", "camelliagcm"]: return csCamelliaGCM
   if v in ["aurora", "aurora-siv", "aurorasiv"]: return csAuroraCtr
   raise newException(ValueError, "unknown cipher: " & s)
 
@@ -726,7 +779,16 @@ proc main() =
       of "e","encrypt": mode = 0
       of "d","decrypt": mode = 1
       of "h","help":
-        echo "NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/aurora-siv)"; return
+        echo "NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)"
+        echo "nimcrypt encrypt/decrypt [args] file"
+        echo "-q/--quiet"
+        echo "-r/--recursive"
+        echo "-v/--version"
+        echo "-c/--cipher"
+        echo "-m"
+        echo "-t"
+        echo "-p"
+        return
       of "q","quiet": quiet = true
       of "r","recursive": recursive = true
       of "v","version": echo "3"; return
