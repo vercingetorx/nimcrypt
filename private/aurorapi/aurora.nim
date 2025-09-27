@@ -5,6 +5,7 @@
 when isMainModule: discard
 
 import std/[strformat, sysrand]
+import private/sha3/shake256
 import src/aead
 import src/aurora256
 import src/common
@@ -141,14 +142,38 @@ proc xexOpen*(c: AuroraPiCipher, sectorTweak: openArray[byte], ad: openArray[byt
 proc sivSeal*(c: AuroraPiCipher, ad: openArray[byte], plaintext: openArray[byte]): (array[16,byte], seq[byte]) =
   ## π-SIV: deterministic AEAD. Returns (SIV16, ciphertext). Safe default for general use.
   let ksEnc = c.keySchedule
-  let ksMac  = c.deriveKeySchedule(DOM_TAG)
-  aead.sivSeal(ksEnc, ksMac, ad, plaintext)
+  # Derive S2V MAC key via SHAKE256 to remove PRP dependency
+  var sh = newShake256Ctx()
+  sh.update("AURORA-PI-CT")
+  sh.update("S2V-MAC-KEY-v1")
+  sh.update("\x00")
+  # bind to root key and effective tweak domain used for MAC (TAG domain)
+  var keySeq: seq[byte] = @[]; keySeq.setLen(PI_KEY_BYTES)
+  for i in 0 ..< PI_KEY_BYTES: keySeq[i] = c.rootKey[i]
+  var tw: array[PI_TWEAK_BYTES, byte]
+  for i in 0 ..< PI_TWEAK_BYTES: tw[i] = byte(uint8(c.rootTweak[i]) xor uint8(DOM_TAG[i]))
+  sh.update(keySeq)
+  sh.update("\x00")
+  sh.update(tw)
+  let mk = sh.read(32)
+  aead.sivSealWithMacKey(ksEnc, mk, ad, plaintext)
 
 proc sivOpen*(c: AuroraPiCipher, ad: openArray[byte], siv: openArray[byte], ciphertext: openArray[byte]): seq[byte] =
   ## Verify and decrypt a π-SIV ciphertext. Raises AuroraAuthError on failure.
   let ksEnc = c.keySchedule
-  let ksMac  = c.deriveKeySchedule(DOM_TAG)
-  aead.sivOpen(ksEnc, ksMac, ad, siv, ciphertext)
+  var sh = newShake256Ctx()
+  sh.update("AURORA-PI-CT")
+  sh.update("S2V-MAC-KEY-v1")
+  sh.update("\x00")
+  var keySeq: seq[byte] = @[]; keySeq.setLen(PI_KEY_BYTES)
+  for i in 0 ..< PI_KEY_BYTES: keySeq[i] = c.rootKey[i]
+  var tw: array[PI_TWEAK_BYTES, byte]
+  for i in 0 ..< PI_TWEAK_BYTES: tw[i] = byte(uint8(c.rootTweak[i]) xor uint8(DOM_TAG[i]))
+  sh.update(keySeq)
+  sh.update("\x00")
+  sh.update(tw)
+  let mk = sh.read(32)
+  aead.sivOpenWithMacKey(ksEnc, mk, ad, siv, ciphertext)
 
 
 when isMainModule:
