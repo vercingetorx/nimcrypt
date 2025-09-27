@@ -1,5 +1,5 @@
 # NimCrypt-AEF — Authenticated Encrypted File format (chunked, multi-cipher)
-# Ciphers: XChaCha20, AES-GCM-SIV, Twofish-CTR, Aurora-CTR
+# Ciphers: XChaCha20, AES-GCM-SIV, Twofish-GCM-SIV, Camellia-GCM-SIV
 # Notes: AEAD per-record with AD binding header, filename, metadata, and chunk index/length.
 #
 # CLI:
@@ -9,12 +9,12 @@
 #   -v/--version           : print version
 #   --chunk <MiB>          : chunk size in MiB (default 1)
 #   --m <KiB> --t <iters> --p <lanes> : Argon2id (defaults m=65536,t=3,p=1)
-#   --cipher <name>        : xchacha20 (default) | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv | aurora-siv
+#   --cipher <name>        : xchacha20 (default) | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv
 #
 # Header v3 (authenticated as AD):
 #   magic[4] = "AEF1"
 #   version[1] = 3
-#   suite[1]   : 0=xchacha20, 1=aes-gcm-siv, 2=twofish-gcm-siv, 3=serpent-gcm-siv, 4=camellia-gcm-siv, 50=aurora-siv
+#   suite[1]   : 0=xchacha20, 1=aes-gcm-siv, 2=twofish-gcm-siv, 3=serpent-gcm-siv, 4=camellia-gcm-siv
 #   flags[1]   (bit0: has filename, bit1: has metadata)
 #   mKiB[u32], t[u32], p[u32]
 #   salt[32]
@@ -38,7 +38,6 @@ import private/chacha20/poly1305
 # block ciphers
 import private/aes/aes
 import private/twofish/twofish
-import private/aurorapi/aurora
 import private/serpent/serpent
 import private/camellia/camellia
 import private/chacha20/chacha20
@@ -71,8 +70,6 @@ type
     csTwofishGCM = 2'u8
     csSerpentGCM = 3'u8
     csCamelliaGCM= 4'u8
-    # test ciphers 50+
-    csAuroraCtr  = 50'u8
 
   Header* = object
     magic:       array[4, char]
@@ -143,7 +140,6 @@ proc suiteName(s: CipherSuite): string =
   of csTwofishGCM:  "twofish-gcm-siv"
   of csSerpentGCM:  "serpent-gcm-siv"
   of csCamelliaGCM: "camellia-gcm-siv"
-  of csAuroraCtr:   "aurora-ctr"
 
 
 proc tagLenForSuite(s: CipherSuite): int =
@@ -190,7 +186,7 @@ proc nonce12From24(n24: array[NonceBaseLen, byte]): array[12, byte] =
   return [byte 0,0,0,0, n24[16],n24[17],n24[18],n24[19],n24[20],n24[21],n24[22],n24[23]]
 
 
-# For Aurora (16-byte nonce)
+# Unused
 proc nonce16ForIdx(base: array[NonceBaseLen, byte], idx: uint64): array[16, byte] =
   for i in 0..<8:
     result[i] = base[i]
@@ -303,21 +299,6 @@ proc aeadCamelliaGcmSivDecrypt(key: openArray[byte], nonce12: array[12,byte],
   let pt = ctx.decrypt(ad, ct, tag)
   return (true, pt)
 
-
-# Aurora-SIV
-proc aeadAuroraCtrP1305Encrypt(key: openArray[byte], nonce16: array[16,byte],
-                               ad, pt: openArray[byte]): (seq[byte], array[TagLen, byte]) =
-  let ctx = newAuroraPiContext(key, nonce16)
-  let (tag, ct) = ctx.sivSeal(ad, pt)
-  return (ct, tag)
-
-
-proc aeadAuroraCtrP1305Decrypt(key: openArray[byte], nonce16: array[16,byte],
-                               ad, ct: openArray[byte], tag: openArray[byte]): (bool, seq[byte]) =
-  let ctx = newAuroraPiContext(key, nonce16)
-  var pt = ctx.sivOpen(ad, tag, ct)
-  return (true, pt)
-
 # ---- Suite router helpers ----
 
 proc aeadEncryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLen, byte],
@@ -328,7 +309,6 @@ proc aeadEncryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLe
   of csTwofishGCM:  aeadTwofishGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
   of csSerpentGCM:  aeadSerpentGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
   of csCamelliaGCM: aeadCamelliaGcmSivEncrypt(key, nonce12ForIdx(base, idx), ad, pt)
-  of csAuroraCtr:   aeadAuroraCtrP1305Encrypt(key, nonce16ForIdx(base, idx), ad, pt)
 
 
 proc aeadDecryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLen, byte],
@@ -339,7 +319,6 @@ proc aeadDecryptAt(s: CipherSuite, key: openArray[byte], base: array[NonceBaseLe
   of csTwofishGCM:  aeadTwofishGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
   of csSerpentGCM:  aeadSerpentGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
   of csCamelliaGCM: aeadCamelliaGcmSivDecrypt(key, nonce12ForIdx(base, idx), ad, ct, tag)
-  of csAuroraCtr:   aeadAuroraCtrP1305Decrypt(key, nonce16ForIdx(base, idx), ad, ct, tag)
 
 
 # Keep the old meta/filename/chunk helpers for clarity
@@ -750,12 +729,11 @@ proc parseSuite(s: string): CipherSuite =
   if v in ["twofish", "twofish-gcm-siv", "twofish-gcm", "twofishgcm"]: return csTwofishGCM
   if v in ["serpent", "serpent-gcm-siv", "serpent-gcm", "serpentgcm"]: return csSerpentGCM
   if v in ["camellia", "camellia-gcm-siv", "camellia-gcm", "camelliagcm"]: return csCamelliaGCM
-  if v in ["aurora", "aurora-siv", "aurorasiv"]: return csAuroraCtr
   raise newException(ValueError, "unknown cipher: " & s)
 
 proc usage() =
   echo """
-NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv/aurora-siv)
+NimCrypt-AEF — multi-cipher (xchacha20/aes-gcm-siv/twofish-gcm-siv/serpent-gcm-siv/camellia-gcm-siv)
 usage:
   nimcrypt [options] <path> [<path> ...]
 
@@ -777,7 +755,7 @@ usage:
     --p <lanes>        Parallelism (default: 1)
 
   Cipher suite
-    --cipher <name>    xchacha20 | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv | aurora-siv (default: xchacha20)
+    --cipher <name>    xchacha20 | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv (default: xchacha20)
 """
 
 proc main() =
