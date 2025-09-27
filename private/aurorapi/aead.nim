@@ -9,6 +9,7 @@ when isMainModule: discard
 import std/strformat
 import ./aurora256
 import ./modes
+import ../private/sha3/sha3_256
 ## Note: This module is parameterized by KeySchedule inputs; the public API module
 ## (aurora.nim) derives appropriate schedules and calls into these functions.
 
@@ -159,39 +160,104 @@ proc ctrEncWithNonce(ks: KeySchedule, nonce: array[16, byte], data: openArray[by
     for i in 0 ..< data.len: result[i] = data[i]
     st.ctrXor(result)
 
-proc sivSeal*(ksEnc: KeySchedule, ksMac: KeySchedule, ad: openArray[byte], plaintext: openArray[byte]): (array[16,byte], seq[byte]) =
-  ## Deterministic AEAD (misuse-resistant). Returns (SIV16, ciphertext).
-  let ksMac = ksMac
-  # Aggregate SIV via MP over AD and PT with a header
-  var st: array[PI_BLOCK_BYTES, byte]
-  for j in 0 ..< PI_BLOCK_BYTES: st[j] = 0
-  var hdr: array[PI_BLOCK_BYTES, byte]
-  putLe64(hdr, 0,  uint64(ad.len))
-  putLe64(hdr, 8,  uint64(plaintext.len))
-  let modeId = "pi-SIV-v1"
-  for k in 0 ..< modeId.len: hdr[16+k] = byte(modeId[k])
-  mpCompress(st, ksMac, hdr)
-  if ad.len > 0: mpAbsorbBytes(st, ksMac, ad)
-  if plaintext.len > 0: mpAbsorbBytes(st, ksMac, plaintext)
-  # Use first 16 bytes of state as nonce for CTR
-  var nonce: array[16, byte]
-  for i in 0..15: nonce[i] = st[i]
-  let ct = ctrEncWithNonce(ksEnc, nonce, plaintext)
-  return (nonce, ct)
+## HMAC-SHA3-256 (PRF for S2V)
+proc hmacSha3_256(key: openArray[byte], msg: openArray[byte]): array[32, byte]
+proc hmacSha3_256_trunc16(key: openArray[byte], msg: openArray[byte]): array[16, byte]
+proc dbl128(b: var array[16, byte])
+proc s2v(macKey: openArray[byte], ad: openArray[byte], plaintext: openArray[byte]): array[16, byte]
 
-proc sivOpen*(ksEnc: KeySchedule, ksMac: KeySchedule, ad: openArray[byte], siv: openArray[byte], ciphertext: openArray[byte]): seq[byte] =
-  ## Verify and decrypt a SIV-sealed message. Raises on failure.
+proc sivSealWithMacKey*(ksEnc: KeySchedule, macKey: openArray[byte], ad: openArray[byte], plaintext: openArray[byte]): (array[16,byte], seq[byte]) =
+  ## S2V using externally provided MAC key (e.g., from SHAKE256 KDF)
+  let siv = s2v(macKey, ad, plaintext)
+  let ct = ctrEncWithNonce(ksEnc, siv, plaintext)
+  return (siv, ct)
+
+proc sivOpenWithMacKey*(ksEnc: KeySchedule, macKey: openArray[byte], ad: openArray[byte], siv: openArray[byte], ciphertext: openArray[byte]): seq[byte] =
+  ## Verify and decrypt using externally provided MAC key.
   if siv.len != 16:
     raise newException(AuroraAuthError, &"SIV must be 16 bytes, got {siv.len}")
   var nonce: array[16, byte]
   for i in 0..15: nonce[i] = siv[i]
-  # Decrypt
+  # Decrypt first
   result = ctrEncWithNonce(ksEnc, nonce, ciphertext)
   # Recompute SIV over (AD, PT)
-  let (siv2, _) = sivSeal(ksEnc, ksMac, ad, result)
+  let siv2 = s2v(macKey, ad, result)
   var diff: uint8 = 0
   for i in 0..15: diff = diff or (uint8(siv[i]) xor uint8(siv2[i]))
   if diff != 0'u8:
-    # Zero plaintext on auth failure to avoid oracle leakage
     result.setLen(0)
     raise newException(AuroraAuthError, "SIV verification failed")
+## ---- HMAC-SHA3-256 (PRF for S2V) ----
+
+proc hmacSha3_256(key: openArray[byte], msg: openArray[byte]): array[32, byte] =
+  const B = 136  # SHA3-256 block size (rate)
+  # key normalization
+  var k0: array[B, byte]
+  if key.len > B:
+    var c = newSha3_256Ctx()
+    c.update(key)
+    let kh = c.digest()
+    for i in 0 ..< 32: k0[i] = kh[i]
+    for i in 32 ..< B: k0[i] = 0
+  else:
+    for i in 0 ..< key.len: k0[i] = key[i]
+    for i in key.len ..< B: k0[i] = 0
+  var ipad: array[B, byte]
+  var opad: array[B, byte]
+  for i in 0 ..< B:
+    ipad[i] = k0[i] xor 0x36'u8
+    opad[i] = k0[i] xor 0x5c'u8
+  var inner = newSha3_256Ctx()
+  inner.update(ipad)
+  if msg.len > 0: inner.update(msg)
+  let innerDigest = inner.digest()
+  var outer = newSha3_256Ctx()
+  outer.update(opad)
+  outer.update(innerDigest)
+  return outer.digest()
+
+proc hmacSha3_256_trunc16(key: openArray[byte], msg: openArray[byte]): array[16, byte] =
+  let full = hmacSha3_256(key, msg)
+  for i in 0 ..< 16: result[i] = full[i]
+
+## ---- S2V components ----
+
+proc dbl128(b: var array[16, byte]) =
+  ## GF(2^128) doubling with Rijndael polynomial (0x87 in low byte)
+  let carry = (b[0] and 0x80'u8) != 0
+  var i = 15
+  while i > 0:
+    let hi = (b[i-1] shr 7) and 1'u8
+    b[i] = byte((b[i] shl 1) or hi)
+    dec i
+  b[0] = byte(b[0] shl 1)
+  if carry:
+    b[15] = b[15] xor 0x87'u8
+
+proc s2v(macKey: openArray[byte], ad: openArray[byte], plaintext: openArray[byte]): array[16, byte] =
+  ## RFC 5297 S2V-style synthetic IV using HMAC-SHA3-256 as PRF (truncated to 128 bits)
+  var D = hmacSha3_256_trunc16(macKey, @[])  # PRF of empty string
+  if ad.len > 0:
+    dbl128(D)
+    let macAd = hmacSha3_256_trunc16(macKey, ad)
+    for i in 0 ..< 16: D[i] = D[i] xor macAd[i]
+  if plaintext.len >= 16:
+    # T = P with last 16 bytes XOR D
+    var tmp = newSeq[byte](plaintext.len)
+    for i in 0 ..< plaintext.len: tmp[i] = plaintext[i]
+    let off = plaintext.len - 16
+    for i in 0 ..< 16: tmp[off + i] = tmp[off + i] xor D[i]
+    let mac = hmacSha3_256_trunc16(macKey, tmp)
+    return mac
+  else:
+    # T = pad(P) XOR dbl(D)
+    var t: array[16, byte]
+    for i in 0 ..< plaintext.len: t[i] = plaintext[i]
+    t[plaintext.len] = 0x80'u8
+    for i in plaintext.len + 1 ..< 16: t[i] = 0
+    dbl128(D)
+    for i in 0 ..< 16: t[i] = t[i] xor D[i]
+    let mac = hmacSha3_256_trunc16(macKey, t)
+    return mac
+
+## Removed PRP-derived S2V MAC key; SHAKE256-based keying lives in aurora.nim
