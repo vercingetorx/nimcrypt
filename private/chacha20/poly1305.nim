@@ -1,5 +1,5 @@
 import std/[parseutils, strutils, sysrand]
-import ../blake2/blake2s
+import ./blake2/blake2s
 
 from chacha20 import derivePoly1305KeyPair
 
