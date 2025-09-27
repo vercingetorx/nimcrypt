@@ -2,7 +2,7 @@
 
 Simple, fast, password‑based file encryption using an authenticated, chunked file format. Supports multiple cipher suites (default XChaCha20‑Poly1305) with strong key derivation via Argon2id. Encrypted filenames are hidden on disk by hashing the encrypted name and appending `.crypt`.
 
-- Multi‑cipher: `xchacha20-poly1305` (default), `aes-gcm-siv`, `twofish-gcm-siv`, `serpent-gcm-siv`, `camellia-gcm-siv`, `aurora-siv`
+- Multi‑cipher: `xchacha20-poly1305` (default), `aes-gcm-siv`, `twofish-gcm-siv`, `serpent-gcm-siv`, `camellia-gcm-siv`
 - Authenticated chunked format: detects corruption and tampering per chunk
 - Password KDF: Argon2id with tunable memory/time/parallelism
 - Preserves file metadata (mtime + permissions) on decrypt
@@ -57,7 +57,7 @@ KDF (Argon2id)
   --p <lanes>        Parallelism (default: 1)
 
 Cipher suite
-  --cipher <name>    xchacha20 | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv | aurora-siv (default: xchacha20)
+  --cipher <name>    xchacha20 | aes-gcm-siv | twofish-gcm-siv | serpent-gcm-siv | camellia-gcm-siv (default: xchacha20)
 ```
 
 Examples:
@@ -89,7 +89,7 @@ Examples:
 
 - Magic/version: `AEF1` / v3
 - KDF: Argon2id (configurable m/t/p) derives a master key; BLAKE2s labels derive per‑file meta/data keys.
-- Ciphers: XChaCha20‑Poly1305, AES‑GCM‑SIV, Twofish‑GCM‑SIV, Serpent‑GCM‑SIV, Camellia‑GCM‑SIV, Aurora‑SIV.
+- Ciphers: XChaCha20‑Poly1305, AES‑GCM‑SIV, Twofish‑GCM‑SIV, Serpent‑GCM‑SIV, Camellia‑GCM‑SIV.
 - Associated Data (AD): binds header, encrypted filename, optional encrypted metadata, plus chunk index and length.
 
 This design ensures that changing the header, filename, metadata, order of chunks, or any byte in a chunk is detected.
@@ -99,7 +99,3 @@ This design ensures that changing the header, filename, metadata, order of chunk
 - This project has not been externally audited. Use at your own risk for sensitive data.
 - Strong passwords matter. Increase Argon2 parameters (`--m`, `--t`, `--p`) as your machine allows.
 - Forgetting the password means the data cannot be recovered.
-
-## Warning
-
- - [AURORA-Π](https://github.com/vercingetorx/aurora-pi) is an experimental cipher that has not been peer reviewed. It should not be used when you need guaranteed security.
